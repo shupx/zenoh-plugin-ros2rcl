@@ -1,0 +1,5 @@
+/target/
+*.so
+__pycache__/
+vendor/rclrs/.cargo-ok
+vendor/rclrs/.cargo_vcs_info.json

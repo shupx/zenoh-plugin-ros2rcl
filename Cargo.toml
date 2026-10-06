@@ -1,0 +1,37 @@
+[package]
+name = "zenoh-plugin-ros2rcl"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Configurable ROS 2 dynamic-message topic and service bridge for Zenoh 1.10.1"
+
+[workspace]
+members = ["tools/zenohd"]
+default-members = ["."]
+exclude = ["vendor/rclrs"]
+
+[lib]
+name = "zenoh_plugin_ros2rcl"
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = ["dynamic_plugin"]
+dynamic_plugin = []
+
+[dependencies]
+anyhow = "1"
+git-version = "0.3.9"
+rclrs = { path = "vendor/rclrs" }
+ros-env = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+json5 = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zenoh = { version = "=1.10.1", path = "../zenoh/zenoh", features = ["internal", "plugins", "unstable"] }
+zenoh-plugin-trait = { version = "=1.10.1", path = "../zenoh/plugins/zenoh-plugin-trait" }
+zenoh-util = { version = "=1.10.1", path = "../zenoh/commons/zenoh-util" }
+
+[build-dependencies]
+cc = "1"

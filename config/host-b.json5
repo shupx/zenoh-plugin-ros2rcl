@@ -1,0 +1,15 @@
+{
+  domain_id: 20,
+  key_prefix: "host_b",
+  publish: [{ topic: "/chatter", ros_type: "std_msgs/msg/String" }],
+  subscribe: [
+    { key: "host_a/chatter", topic: "/remote_chatter", ros_type: "std_msgs/msg/String" },
+  ],
+  expose_services: [
+    { service: "/add_two_ints", ros_type: "example_interfaces/srv/AddTwoInts", timeout_ms: 5000 },
+  ],
+  query_services: [
+    { key: "host_a/add_two_ints", service: "/remote_add_two_ints",
+      ros_type: "example_interfaces/srv/AddTwoInts", timeout_ms: 6000 },
+  ],
+}
