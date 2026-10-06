@@ -1,6 +1,7 @@
 fn main() {
     println!("cargo:rerun-if-changed=native/bridge.c");
     println!("cargo:rerun-if-env-changed=AMENT_PREFIX_PATH");
+    println!("cargo:rerun-if-env-changed=ROS_DISTRO");
     let mut build = cc::Build::new();
     build.file("native/bridge.c").flag("-std=c11");
     for prefix in std::env::var("AMENT_PREFIX_PATH")
@@ -16,6 +17,10 @@ fn main() {
             "rosidl_runtime_c",
             "rosidl_typesupport_interface",
             "rcl_yaml_param_parser",
+            "type_description_interfaces",
+            "builtin_interfaces",
+            "service_msgs",
+            "rosidl_dynamic_typesupport",
         ] {
             build.include(include.join(package));
         }

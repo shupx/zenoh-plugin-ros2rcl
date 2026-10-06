@@ -20,7 +20,15 @@ Choose the target matching `uname -m`:
 | x86_64 / amd64 | `x86_64-unknown-linux-gnu` |
 | aarch64 / arm64 | `aarch64-unknown-linux-gnu` |
 
-Binaries require Ubuntu 22.04 and ROS 2 Humble. Both machines need matching ROS message/service definitions and installed type support. Plugin users also need a compatible Zenoh 1.10.1 host; check the Rust compiler version in `build-info.json`.
+Choose the archive suffix matching your ROS installation:
+
+| Archive suffix | Runtime |
+| --- | --- |
+| `ros2-humble.zip` | Ubuntu 22.04 / ROS 2 Humble |
+| `ros2-jazzy.zip` | Ubuntu 24.04 / ROS 2 Jazzy |
+| `ros2-lyrical.zip` | Ubuntu 26.04 / ROS 2 Lyrical |
+
+Both machines need matching ROS message/service definitions and installed type support. Plugin users also need a compatible Zenoh 1.10.1 host; check the Rust compiler version in `build-info.json`. Use the binary built for your local ROS distribution.
 
 Verify the download, extract the ZIP, and open the extraction directory:
 
@@ -28,10 +36,10 @@ Verify the download, extract the ZIP, and open the extraction directory:
 sha256sum -c *.zip.sha256
 unzip '<downloaded-archive>.zip' -d ros2rcl
 cd ros2rcl
-source /opt/ros/humble/setup.bash
+source /opt/ros/<distro>/setup.bash
 ```
 
-Also source your ROS workspace if using custom interfaces.
+Replace `<distro>` with `humble`, `jazzy`, or `lyrical`. Also source your ROS workspace if using custom interfaces.
 
 ## Standalone Bridge
 
@@ -56,7 +64,7 @@ The examples use domains 10 and 20. Run local ROS applications in the matching d
 In `config/zenohd.json5`, set `plugins.ros2rcl.__path__` to the absolute path of the extracted `libzenoh_plugin_ros2rcl.so`, then edit its routes and domain.
 
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/<distro>/setup.bash
 zenohd -c config/zenohd.json5
 ```
 

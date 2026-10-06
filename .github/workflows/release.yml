@@ -12,15 +12,19 @@ concurrency:
 
 jobs:
   build:
-    name: Linux ${{ matrix.arch }} / ROS Humble
+    name: Linux ${{ matrix.arch }} / ROS ${{ matrix.ros_distro }}
     runs-on: ${{ matrix.runner }}
-    container: ros:humble-ros-base-jammy
+    container: ${{ matrix.image }}
+    env:
+      ROS_DISTRO: ${{ matrix.ros_distro }}
     timeout-minutes: 60
     outputs:
       version: ${{ steps.meta.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
+        ros_distro: [humble, jazzy, lyrical]
+        arch: [amd64, arm64]
         include:
           - arch: amd64
             runner: ubuntu-24.04
@@ -28,6 +32,12 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+          - ros_distro: humble
+            image: ros:humble-ros-base-jammy
+          - ros_distro: jazzy
+            image: ros:jazzy-ros-base-noble
+          - ros_distro: lyrical
+            image: ros:lyrical-ros-base-resolute
     defaults:
       run:
         shell: bash
@@ -40,8 +50,8 @@ jobs:
           apt-get install -y --no-install-recommends \
             build-essential cmake curl git pkg-config zip file \
             python3-colcon-common-extensions python3-colcon-override-check python3-tomli \
-            ros-humble-rosidl-default-generators ros-humble-example-interfaces \
-            ros-humble-std-msgs
+            "ros-${ROS_DISTRO}-rosidl-default-generators" "ros-${ROS_DISTRO}-example-interfaces" \
+            "ros-${ROS_DISTRO}-std-msgs"
 
       - name: Install Rust
         run: |
@@ -84,12 +94,14 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.meta.outputs.version }}
           BUILD_TARGET: ${{ matrix.target }}
-        run: python3 scripts/package-release.py --version "$RELEASE_VERSION" --target "$BUILD_TARGET"
+        run: |
+          source "$RUNNER_TEMP/ros-rust/install/setup.bash"
+          python3 scripts/package-release.py --version "$RELEASE_VERSION" --target "$BUILD_TARGET" --ros-distro "$ROS_DISTRO"
 
       - name: Upload archives
         uses: actions/upload-artifact@v4
         with:
-          name: ros2rcl-${{ steps.meta.outputs.version }}-${{ matrix.arch }}
+          name: ros2rcl-${{ steps.meta.outputs.version }}-${{ matrix.ros_distro }}-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
           retention-days: 14

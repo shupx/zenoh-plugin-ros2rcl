@@ -2,14 +2,14 @@
 
 ## Build
 
-Tested on Linux with ROS 2 Humble and Rust 1.97.1. Requires a C compiler and ROS Rust interfaces compatible with rclrs 0.8 / rosidl_runtime_rs 0.7, including `rcl_interfaces`. Zenoh dependencies are pinned to 1.10.1 on crates.io.
+Build separately for ROS 2 Humble (Ubuntu 22.04), Jazzy (Ubuntu 24.04), or Lyrical (Ubuntu 26.04), using Rust 1.97.1. Requires a C compiler and ROS Rust interfaces compatible with rclrs 0.8 / rosidl_runtime_rs 0.7, including `rcl_interfaces`. Zenoh dependencies are pinned to 1.10.1 on crates.io.
 
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/<distro>/setup.bash
 cargo build --locked
 ```
 
-Outputs: `target/debug/libzenoh_plugin_ros2rcl.so` and `target/debug/zenoh-bridge-ros2rcl`. Add `--release` for optimized binaries. Plugin hosts must have a compatible Rust ABI.
+Replace `<distro>` with `humble`, `jazzy`, or `lyrical`. Outputs: `target/debug/libzenoh_plugin_ros2rcl.so` and `target/debug/zenoh-bridge-ros2rcl`. Add `--release` for optimized binaries. Plugin hosts must have a compatible Rust ABI. Use a separate `CARGO_TARGET_DIR` for each distribution.
 
 To generate the required Rust interfaces:
 
@@ -18,7 +18,7 @@ bash scripts/ci-ros-interfaces.sh /tmp/ros2rcl-interfaces
 source /tmp/ros2rcl-interfaces/install/setup.bash
 ```
 
-This requires Git, CMake, colcon, and ROS interface generators. Business message types use runtime C/introspection type support and need no generated Rust code.
+The script uses the sourced `ROS_DISTRO`; an optional second argument selects it explicitly. Use a separate interface workspace per distribution. This requires Git, CMake, colcon (including `python3-colcon-override-check`), and ROS interface generators. Business message types use runtime C/introspection type support and need no generated Rust code.
 
 ## Implementation
 
@@ -52,14 +52,14 @@ Integration tests use ROS domains 171/172; override with `TEST_DOMAIN_A` and `TE
 
 ## Releases
 
-[release.yml](https://github.com/shupx/zenoh-plugin-ros2rcl/blob/main/.github/workflows/release.yml) uses native amd64/arm64 runners with Ubuntu 22.04 / ROS 2 Humble containers and Rust 1.97.1. It generates ROS Rust interfaces, runs tests, builds release binaries, and packages separate plugin/bridge ZIPs with SHA-256 checksums and build metadata.
+[release.yml](https://github.com/shupx/zenoh-plugin-ros2rcl/blob/main/.github/workflows/release.yml) uses native amd64/arm64 runners with Humble/Jazzy/Lyrical containers and Rust 1.97.1. All six builds generate ROS Rust interfaces, run unit and integration tests, and package separate plugin/bridge ZIPs with SHA-256 checksums and build metadata. Archive and artifact names include the ROS distribution.
 
-Run **Release binaries** manually from GitHub Actions. After both architectures pass, it uploads workflow artifacts and creates a draft release tagged `v<Cargo version>` at the selected commit. If run on a tag, that tag must match the Cargo version and is reused. Review the draft before publishing.
+Run **Release binaries** manually from GitHub Actions. After all builds pass, it creates a draft release tagged `v<Cargo version>` at the selected commit. If run on a tag, that tag must match the Cargo version and is reused. Review the draft before publishing.
 
 Package a local release build:
 
 ```bash
-python3 scripts/package-release.py --version 0.1.0 --target x86_64-unknown-linux-gnu
+python3 scripts/package-release.py --version 0.1.0 --target x86_64-unknown-linux-gnu --ros-distro "$ROS_DISTRO"
 ```
 
-Use `aarch64-unknown-linux-gnu` for arm64. The script checks ELF architecture and linked libraries; `--build-dir` and `--output` override defaults. Outputs go to `dist/`.
+Use `aarch64-unknown-linux-gnu` for arm64. The script checks the sourced ROS distribution, ELF architecture, and linked libraries; `--build-dir` and `--output` override defaults. Outputs go to `dist/`.
