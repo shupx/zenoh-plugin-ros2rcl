@@ -1,21 +1,28 @@
 {
-  domain_id: 10,
-  node_name: "zenoh_ros2rcl",
-  config_service: "/zenoh_ros2rcl/set_config",
-  key_prefix: "host_a",
-  max_in_flight: 64,
-  publish: [
-    { topic: "/chatter", ros_type: "std_msgs/msg/String", max_frequency: 10.0,
-      qos: { reliable: true, transient_local: false, depth: 10 } },
-  ],
-  subscribe: [
-    { key: "host_b/chatter", topic: "/remote_chatter", ros_type: "std_msgs/msg/String" },
-  ],
-  expose_services: [
-    { service: "/add_two_ints", ros_type: "example_interfaces/srv/AddTwoInts", timeout_ms: 5000 },
-  ],
-  query_services: [
-    { key: "host_b/add_two_ints", service: "/remote_add_two_ints",
-      ros_type: "example_interfaces/srv/AddTwoInts", timeout_ms: 6000 },
-  ],
+  mode: "peer",
+  listen: { endpoints: ["tcp/0.0.0.0:7447"] },
+  scouting: { multicast: { enabled: false } },
+  plugins: {
+    ros2rcl: {
+      domain_id: 10,
+      node_name: "zenoh_ros2rcl",
+      config_service: "/zenoh_ros2rcl/set_config",
+      key_prefix: "host_a",
+      max_in_flight: 64,
+      publish: [
+        { topic: "/chatter", ros_type: "std_msgs/msg/String", max_frequency: 10.0,
+          qos: { reliable: true, transient_local: false, depth: 10 } },
+      ],
+      subscribe: [
+        { key: "host_b/chatter", topic: "/remote_chatter", ros_type: "std_msgs/msg/String" },
+      ],
+      expose_services: [
+        { service: "/add_two_ints", ros_type: "example_interfaces/srv/AddTwoInts", timeout_ms: 5000 },
+      ],
+      query_services: [
+        { key: "host_b/add_two_ints", service: "/remote_add_two_ints",
+          ros_type: "example_interfaces/srv/AddTwoInts", timeout_ms: 6000 },
+      ],
+    },
+  },
 }

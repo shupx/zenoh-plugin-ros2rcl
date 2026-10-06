@@ -2,66 +2,42 @@
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shupx/zenoh-plugin-ros2rcl)
 
-Forward ROS 2 topics and services between machines and ROS domains using Zenoh 1.10.1.
+Forward ROS 2 topics and services between machines and ROS domains using Zenoh.
 
 ## Download
 
-Download a ZIP and its matching `.sha256` file from [Releases](https://github.com/shupx/zenoh-plugin-ros2rcl/releases).
+Download a ZIP file from [Releases](https://github.com/shupx/zenoh-plugin-ros2rcl/releases).
+
+The `version` should match the zenohd version. The `ros2` suffix should match your ROS distribution. The archive contains a standalone bridge and a plugin for an existing zenohd.
 
 | Use | Archive prefix |
 | --- | --- |
-| Standalone bridge | `zenoh-bridge-ros2rcl-<version>` |
-| Plugin for an existing zenohd | `zenoh-plugin-ros2rcl-<version>` |
-
-Choose the target matching `uname -m`:
-
-| Machine | Archive target |
-| --- | --- |
-| x86_64 / amd64 | `x86_64-unknown-linux-gnu` |
-| aarch64 / arm64 | `aarch64-unknown-linux-gnu` |
-
-Choose the archive suffix matching your ROS installation:
-
-| Archive suffix | Runtime |
-| --- | --- |
-| `ros2-humble.zip` | Ubuntu 22.04 / ROS 2 Humble |
-| `ros2-jazzy.zip` | Ubuntu 24.04 / ROS 2 Jazzy |
-| `ros2-lyrical.zip` | Ubuntu 26.04 / ROS 2 Lyrical |
-
-Both machines need matching ROS message/service definitions and installed type support. Plugin users also need a compatible Zenoh 1.10.1 host; check the Rust compiler version in `build-info.json`. Use the binary built for your local ROS distribution.
-
-Verify the download, extract the ZIP, and open the extraction directory:
-
-```bash
-sha256sum -c *.zip.sha256
-unzip '<downloaded-archive>.zip' -d ros2rcl
-cd ros2rcl
-source /opt/ros/<distro>/setup.bash
-```
-
-Replace `<distro>` with `humble`, `jazzy`, or `lyrical`. Also source your ROS workspace if using custom interfaces.
+| Standalone bridge | `zenoh-bridge-ros2rcl-<version>-<target>-<ros2-version>` |
+| Plugin for an existing zenohd | `zenoh-plugin-ros2rcl-<version>-<target>-<ros2-version>` |
 
 ## Standalone Bridge
 
-Edit [host-a.json5](config/host-a.json5) and [host-b.json5](config/host-b.json5) for your topics, services, and ROS domains. In B's `config/zenoh-b.json5`, replace `127.0.0.1` with A's reachable address. Allow TCP port 7447 on A.
+Edit `plugins.ros2rcl` in [host-a.json5](config/host-a.json5) and [host-b.json5](config/host-b.json5) for your topics, services, and ROS domains. In B's `connect.endpoints`, replace `127.0.0.1` with A's reachable address. Allow TCP port 7447 on A.
 
 On host A:
 
 ```bash
-./zenoh-bridge-ros2rcl config/host-a.json5 config/zenoh-a.json5
+./zenoh-bridge-ros2rcl -c config/host-a.json5
 ```
 
 On host B:
 
 ```bash
-./zenoh-bridge-ros2rcl config/host-b.json5 config/zenoh-b.json5
+./zenoh-bridge-ros2rcl -c config/host-b.json5
 ```
 
 The examples use domains 10 and 20. Run local ROS applications in the matching domain, for example `export ROS_DOMAIN_ID=10` on A.
 
 ## zenohd Plugin
 
-In `config/zenohd.json5`, set `plugins.ros2rcl.__path__` to the absolute path of the extracted `libzenoh_plugin_ros2rcl.so`, then edit its routes and domain.
+For zenohd, put `libzenoh_plugin_ros2rcl.so` in the same directory as the zenohd executable, or set `plugins.ros2rcl.__path__` to the absolute path of the extracted `libzenoh_plugin_ros2rcl.so`. See [zenohd.json5](config/zenohd.json5). 
+
+This is useful when you need to run multiple plugins in the same zenohd process.
 
 ```bash
 source /opt/ros/<distro>/setup.bash
@@ -91,7 +67,7 @@ zenohd -c config/zenohd.json5
 
 ## Change Configuration
 
-Send a complete JSON configuration through the local service:
+Send the complete `plugins.ros2rcl` configuration object (without the Zenoh wrapper) through the local service:
 
 ```bash
 ROS_DOMAIN_ID=10 /usr/bin/python3 scripts/set_config.py new-config.json

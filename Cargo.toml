@@ -1,6 +1,6 @@
 [package]
 name = "zenoh-plugin-ros2rcl"
-version = "0.1.0"
+version = "1.10.1"
 edition = "2021"
 license = "Apache-2.0"
 description = "Configurable ROS 2 dynamic-message topic and service bridge for Zenoh 1.10.1"

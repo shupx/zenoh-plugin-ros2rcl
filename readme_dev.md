@@ -22,6 +22,8 @@ The script uses the sourced `ROS_DISTRO`; an optional second argument selects it
 
 ## Implementation
 
+The bridge accepts `-c CONFIG.json5` (or `--config`) and statically registers the same plugin used by zenohd. Both read routes from `plugins.ros2rcl`; the previous two-file CLI is no longer supported. Runtime ROS configuration updates still take the route configuration object without the Zenoh wrapper.
+
 | Route | ROS 2 | Zenoh |
 | --- | --- | --- |
 | `publish` | Dynamic subscription | Publisher |
@@ -59,7 +61,7 @@ Run **Release binaries** manually from GitHub Actions. After all builds pass, it
 Package a local release build:
 
 ```bash
-python3 scripts/package-release.py --version 0.1.0 --target x86_64-unknown-linux-gnu --ros-distro "$ROS_DISTRO"
+python3 scripts/package-release.py --version 1.10.1 --target x86_64-unknown-linux-gnu --ros-distro "$ROS_DISTRO"
 ```
 
 Use `aarch64-unknown-linux-gnu` for arm64. The script checks the sourced ROS distribution, ELF architecture, and linked libraries; `--build-dir` and `--output` override defaults. Outputs go to `dist/`.

@@ -61,20 +61,17 @@ class BridgeIntegration(unittest.TestCase):
         z_b = {"mode": "peer", "connect": {"endpoints": [f"tcp/127.0.0.1:{p}"]},
                "scouting": {"multicast": {"enabled": False}}}
         for i, (cfg, zcfg) in enumerate([(cls.a_config, z_a), (cls.b_config, z_b)]):
-            file = Path(cls.temp.name) / f"ros{i}.json"
             zfile = Path(cls.temp.name) / f"zenoh{i}.json"
-            file.write_text(json.dumps(cfg))
-            zfile.write_text(json.dumps(zcfg))
+            zcfg["plugins"] = {"ros2rcl": dict(cfg, __required__=True)}
             log = open(Path(cls.temp.name) / f"bridge{i}.log", "w+")
             cls.logs.append(log)
             env = dict(os.environ, RUST_LOG="info")
             if os.environ.get("ZENOH_D"):
-                zcfg["plugins"] = {"ros2rcl": dict(cfg, __required__=True,
-                    __path__=str(TARGET_DIR / BUILD_PROFILE / "libzenoh_plugin_ros2rcl.so"))}
-                zfile.write_text(json.dumps(zcfg))
+                zcfg["plugins"]["ros2rcl"]["__path__"] = str(TARGET_DIR / BUILD_PROFILE / "libzenoh_plugin_ros2rcl.so")
                 cmd = [os.environ["ZENOH_D"], "-c", str(zfile)]
             else:
-                cmd = [str(TARGET_DIR / BUILD_PROFILE / "zenoh-bridge-ros2rcl"), str(file), str(zfile)]
+                cmd = [str(TARGET_DIR / BUILD_PROFILE / "zenoh-bridge-ros2rcl"), "-c", str(zfile)]
+            zfile.write_text(json.dumps(zcfg))
             cls.processes.append(subprocess.Popen(cmd, stdout=log, stderr=log, env=env))
             ctx = Context()
             rclpy.init(context=ctx, domain_id=cfg["domain_id"])
