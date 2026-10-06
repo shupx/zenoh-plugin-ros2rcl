@@ -1,0 +1,118 @@
+name: Release binaries
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Linux ${{ matrix.arch }} / ROS Humble
+    runs-on: ${{ matrix.runner }}
+    container: ros:humble-ros-base-jammy
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake curl git pkg-config zip file \
+            python3-colcon-common-extensions python3-tomli \
+            ros-humble-rosidl-default-generators ros-humble-example-interfaces \
+            ros-humble-std-msgs
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain 1.97.1
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Check version and architecture
+        id: meta
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomli
+          with open("Cargo.toml", "rb") as f:
+              version = tomli.load(f)["package"]["version"]
+          if os.environ["GITHUB_REF_TYPE"] == "tag":
+              tag = os.environ["GITHUB_REF_NAME"]
+              if tag.removeprefix("v") != version:
+                  raise SystemExit(f"Tag {tag} must match Cargo version {version}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              print(f"version={version}", file=f)
+          PY
+          rustc -vV | grep -Fx "host: $BUILD_TARGET"
+
+      - name: Generate ROS Rust interfaces
+        run: bash scripts/ci-ros-interfaces.sh "$RUNNER_TEMP/ros-rust"
+
+      - name: Build and test
+        run: |
+          source "$RUNNER_TEMP/ros-rust/install/setup.bash"
+          cargo test --locked
+          cargo build --release --locked --lib --bin zenoh-bridge-ros2rcl
+          /usr/bin/python3 tests/integration.py
+        env:
+          ROS2RCL_BUILD_PROFILE: release
+
+      - name: Package binaries
+        env:
+          RELEASE_VERSION: ${{ steps.meta.outputs.version }}
+          BUILD_TARGET: ${{ matrix.target }}
+        run: python3 scripts/package-release.py --version "$RELEASE_VERSION" --target "$BUILD_TARGET"
+
+      - name: Upload archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: ros2rcl-${{ steps.meta.outputs.version }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ros2rcl-*
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', needs.build.outputs.version) }}
+          target_commitish: ${{ github.sha }}
+          draft: true
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          files: |
+            dist/*.zip
+            dist/*.sha256

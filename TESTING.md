@@ -25,3 +25,9 @@ Both integration runs used real ROS nodes in domains 171/172 over TCP on one mac
 5. Remote timeout handling and continued operation of other services.
 
 Bridge DDS queue depth follows `max_in_flight`; test clients/services use depth 64. Business nodes need adequate depth for bursts. All test processes exited. Deployment across two physical machines was not tested.
+
+## Release Workflow
+
+Locally verified: actionlint, ROS Rust interface generation, 7 unit tests, amd64 release build, and 5 release integration tests. Both ZIP archives passed content, executable permission, and SHA-256 checks; incorrect architecture labels were rejected.
+
+GitHub Actions and arm64 builds have not been executed locally.

@@ -1,4 +1,5 @@
 /target/
+/dist/
 *.so
 __pycache__/
 vendor/rclrs/.cargo-ok

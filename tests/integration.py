@@ -21,6 +21,8 @@ from rcl_interfaces.msg import Parameter, ParameterValue
 from rcl_interfaces.srv import SetParametersAtomically
 
 ROOT = Path(__file__).resolve().parents[1]
+BUILD_PROFILE = os.environ.get("ROS2RCL_BUILD_PROFILE", "debug")
+TARGET_DIR = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).resolve()
 
 
 def port():
@@ -68,11 +70,11 @@ class BridgeIntegration(unittest.TestCase):
             env = dict(os.environ, RUST_LOG="info")
             if os.environ.get("ZENOH_D"):
                 zcfg["plugins"] = {"ros2rcl": dict(cfg, __required__=True,
-                    __path__=str(ROOT / "target/debug/libzenoh_plugin_ros2rcl.so"))}
+                    __path__=str(TARGET_DIR / BUILD_PROFILE / "libzenoh_plugin_ros2rcl.so"))}
                 zfile.write_text(json.dumps(zcfg))
                 cmd = [os.environ["ZENOH_D"], "-c", str(zfile)]
             else:
-                cmd = [str(ROOT / "target/debug/zenoh-bridge-ros2rcl"), str(file), str(zfile)]
+                cmd = [str(TARGET_DIR / BUILD_PROFILE / "zenoh-bridge-ros2rcl"), str(file), str(zfile)]
             cls.processes.append(subprocess.Popen(cmd, stdout=log, stderr=log, env=env))
             ctx = Context()
             rclpy.init(context=ctx, domain_id=cfg["domain_id"])
