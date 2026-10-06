@@ -13,14 +13,14 @@ ROS 2 dynamic-message bridge for **Zenoh 1.10.1**, available as a plugin or stan
 
 Tested on Linux with ROS 2 Humble and Rust 1.97.1. Requires a C compiler, a sourced ROS environment, and Rust ROS interfaces compatible with rclrs 0.8 / rosidl_runtime_rs 0.7, including `rcl_interfaces`.
 
-Place this repository beside the `zenoh/` 1.10.1 source directory. Both endpoints need matching ROS interface definitions and C/introspection type support; bridged types need no generated Rust code.
+Zenoh dependencies are pinned to 1.10.1 and fetched from crates.io. Both endpoints need matching ROS interface definitions and C/introspection type support; bridged types need no generated Rust code.
 
 ```bash
 source /opt/ros/humble/setup.bash
-cargo build --workspace --locked
+cargo build --locked
 ```
 
-Outputs in `target/debug/`: `libzenoh_plugin_ros2rcl.so`, `zenoh-bridge-ros2rcl`, and `zenohd`. The included host builds upstream Zenoh with the plugin's lockfile. Build host and plugin with the same toolchain and dependencies. For release builds, add `--release` and adjust the plugin path.
+Outputs in `target/debug/`: `libzenoh_plugin_ros2rcl.so` and `zenoh-bridge-ros2rcl`. For release builds, add `--release` and adjust the plugin path.
 
 ## Run
 
@@ -31,10 +31,10 @@ Standalone, on hosts A and B respectively:
 ./target/debug/zenoh-bridge-ros2rcl config/host-b.json5 config/zenoh-b.json5
 ```
 
-Set A's reachable address in `config/zenoh-b.json5`. To load the plugin instead:
+Set A's reachable address in `config/zenoh-b.json5`. To load the plugin into a separately installed, ABI-compatible Zenoh 1.10.1 host:
 
 ```bash
-./target/debug/zenohd -c config/zenohd.json5
+zenohd -c config/zenohd.json5
 ```
 
 ## Configuration
@@ -74,7 +74,8 @@ Dynamic services use an RCL adapter with rclrs-owned messages; see [vendor/READM
 ```bash
 cargo test --locked
 /usr/bin/python3 tests/integration.py
-ZENOH_D="$PWD/target/debug/zenohd" /usr/bin/python3 tests/integration.py
+# Optional: test a separately supplied compatible host.
+ZENOH_D=/path/to/zenohd /usr/bin/python3 tests/integration.py
 ```
 
 Tests use two ROS domains, defaulting to 171/172; override with `TEST_DOMAIN_A` and `TEST_DOMAIN_B`. See [TESTING.md](TESTING.md) for results.
