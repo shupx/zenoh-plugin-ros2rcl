@@ -98,6 +98,65 @@ int bridge_deserialize(bridge_codec *c, const unsigned char *data, size_t size, 
 }
 void bridge_free(void *p) { free(p); }
 
+typedef struct {
+  bridge_context *context;
+  bridge_codec *codec;
+  int publisher;
+  rcl_publisher_t pub;
+  rcl_subscription_t sub;
+} bridge_topic;
+
+bridge_topic *bridge_topic_new(bridge_context *context, const char *package,
+    const char *type, const char *name, int publisher, int reliable,
+    int transient_local, size_t depth) {
+  bridge_codec *codec = bridge_codec_new(package, "msg", type);
+  if (!codec) return NULL;
+  bridge_topic *topic = calloc(1, sizeof(*topic));
+  if (!topic) { bridge_codec_free(codec); return NULL; }
+  topic->context = context; topic->codec = codec; topic->publisher = publisher;
+  rmw_qos_profile_t qos = rmw_qos_profile_default;
+  qos.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST;
+  qos.depth = depth;
+  qos.reliability = reliable ? RMW_QOS_POLICY_RELIABILITY_RELIABLE : RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT;
+  qos.durability = transient_local ? RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL : RMW_QOS_POLICY_DURABILITY_VOLATILE;
+  rcl_ret_t ret;
+  if (publisher) {
+    topic->pub = rcl_get_zero_initialized_publisher();
+    rcl_publisher_options_t options = rcl_publisher_get_default_options();
+    options.qos = qos;
+    ret = rcl_publisher_init(&topic->pub, &context->node, codec->support, name, &options);
+  } else {
+    topic->sub = rcl_get_zero_initialized_subscription();
+    rcl_subscription_options_t options = rcl_subscription_get_default_options();
+    options.qos = qos;
+    ret = rcl_subscription_init(&topic->sub, &context->node, codec->support, name, &options);
+  }
+  if (ret != RCL_RET_OK) { bridge_codec_free(codec); free(topic); return NULL; }
+  return topic;
+}
+void bridge_topic_free(bridge_topic *topic) {
+  rcl_ret_t ignored = topic->publisher
+    ? rcl_publisher_fini(&topic->pub, &topic->context->node)
+    : rcl_subscription_fini(&topic->sub, &topic->context->node);
+  (void)ignored; bridge_codec_free(topic->codec); free(topic);
+}
+int bridge_topic_take(bridge_topic *topic, const unsigned char **data, size_t *size) {
+  rmw_serialized_message_t *buffer = &topic->codec->serialized;
+  buffer->buffer_length = 0;
+  rmw_message_info_t info;
+  rcl_ret_t ret = rcl_take_serialized_message(&topic->sub, buffer, &info, NULL);
+  if (ret == RCL_RET_SUBSCRIPTION_TAKE_FAILED) return 1;
+  if (ret != RCL_RET_OK) return -1;
+  *data = buffer->buffer; *size = buffer->buffer_length;
+  return 0;
+}
+int bridge_topic_publish(bridge_topic *topic, const unsigned char *data, size_t size) {
+  rmw_serialized_message_t buffer = rmw_get_zero_initialized_serialized_message();
+  buffer.buffer = (unsigned char *)data;
+  buffer.buffer_length = size; buffer.buffer_capacity = size;
+  return rcl_publish_serialized_message(&topic->pub, &buffer, NULL);
+}
+
 bridge_endpoint *bridge_endpoint_new(bridge_context *context, const char *package,
                                      const char *type, const char *name, int server, size_t depth) {
   char path[512], symbol[1024];

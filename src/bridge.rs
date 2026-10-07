@@ -1,10 +1,9 @@
 use crate::{
-    config::{Config, Qos},
-    native::{service_codecs, Codec, Endpoint, Header, NativeContext},
+    config::Config,
+    native::{service_codecs, Codec, Endpoint, Header, NativeContext, SerializedTopic},
     throttle::Throttle,
 };
 use anyhow::{anyhow, ensure, Result};
-use rclrs::{CreateBasicExecutor, DynamicSubscription, IntoPrimitiveOptions};
 use ros_env::rcl_interfaces::{
     msg::rmw::SetParametersResult,
     srv::rmw::{SetParametersAtomically_Request, SetParametersAtomically_Response},
@@ -14,7 +13,7 @@ use std::{
     rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc, Arc,
     },
     thread,
     time::{Duration, Instant},
@@ -81,21 +80,15 @@ impl Drop for Bridge {
         }
     }
 }
-fn qos(q: &Qos) -> rclrs::QoSProfile {
-    rclrs::QoSProfile {
-        history: rclrs::QoSHistoryPolicy::KeepLast { depth: q.depth },
-        reliability: if q.reliable {
-            rclrs::QoSReliabilityPolicy::Reliable
-        } else {
-            rclrs::QoSReliabilityPolicy::BestEffort
-        },
-        durability: if q.transient_local {
-            rclrs::QoSDurabilityPolicy::TransientLocal
-        } else {
-            rclrs::QoSDurabilityPolicy::Volatile
-        },
-        ..rclrs::QoSProfile::default()
-    }
+struct ExportTopic {
+    endpoint: SerializedTopic,
+    publisher: zenoh::pubsub::Publisher<'static>,
+    prefix: Vec<u8>,
+    throttle: Throttle,
+}
+struct ImportTopic {
+    endpoint: SerializedTopic,
+    rx: mpsc::Receiver<ZBytes>,
 }
 struct ExportService {
     endpoint: Endpoint,
@@ -120,7 +113,8 @@ struct ImportService {
 }
 struct Routes {
     active: Arc<AtomicBool>,
-    _ros_subscriptions: Vec<DynamicSubscription>,
+    topic_exports: Vec<ExportTopic>,
+    topic_imports: Vec<ImportTopic>,
     _zenoh_subscriptions: Vec<zenoh::pubsub::Subscriber<()>>,
     exports: Vec<ExportService>,
     imports: Vec<ImportService>,
@@ -148,51 +142,47 @@ impl Drop for Routes {
 impl Routes {
     fn build(
         session: &zenoh::Session,
-        node: &rclrs::Node,
+        topic_context: Rc<NativeContext>,
         context: Rc<NativeContext>,
         c: &Config,
     ) -> Result<Self> {
         let mut routes = Self {
             active: Arc::new(AtomicBool::new(false)),
-            _ros_subscriptions: vec![],
+            topic_exports: vec![],
+            topic_imports: vec![],
             _zenoh_subscriptions: vec![],
             exports: vec![],
             imports: vec![],
             max_in_flight: c.max_in_flight,
         };
         for r in &c.publish {
-            let codec = Codec::new(&r.ros_type)?;
+            let endpoint = SerializedTopic::new(
+                topic_context.clone(),
+                &r.ros_type,
+                &r.ros_topic,
+                false,
+                &r.qos,
+            )?;
             let publisher = session
                 .declare_publisher(r.zenoh_key())
                 .wait()
                 .map_err(|e| anyhow!("{e}"))?;
-            let active = routes.active.clone();
-            let throttle = Mutex::new(Throttle::new(r.max_frequency));
-            let sub = node.create_dynamic_subscription(
-                r.ros_type.as_str().try_into()?,
-                r.ros_topic.as_str().qos(qos(&r.qos)),
-                move |msg, _| {
-                    if !active.load(Ordering::Acquire)
-                        || !throttle.lock().unwrap().allow(Instant::now())
-                    {
-                        return;
-                    }
-                    if let Err(e) = codec
-                        .encode(&msg)
-                        .and_then(|data| publisher.put(data).wait().map_err(|e| anyhow!("{e}")))
-                    {
-                        tracing::warn!("topic export failed: {e}");
-                    }
-                },
-            )?;
-            routes._ros_subscriptions.push(sub);
+            routes.topic_exports.push(ExportTopic {
+                prefix: endpoint.prefix().to_vec(),
+                endpoint,
+                publisher,
+                throttle: Throttle::new(r.max_frequency),
+            });
         }
         for r in &c.subscribe {
-            let codec = Codec::new(&r.ros_type)?;
-            let publisher = node.create_dynamic_publisher(
-                r.ros_type.as_str().try_into()?,
-                r.ros_topic.as_str().qos(qos(&r.qos)),
+            let endpoint = SerializedTopic::new(
+                topic_context.clone(),
+                &r.ros_type,
+                &r.ros_topic,
+                true,
+                &r.qos,
             )?;
+            let (tx, rx) = mpsc::channel();
             let active = routes.active.clone();
             let sub = session
                 .declare_subscriber(r.zenoh_key.clone())
@@ -200,16 +190,13 @@ impl Routes {
                     if !active.load(Ordering::Acquire) {
                         return;
                     }
-                    if let Err(e) = codec
-                        .decode(&sample.payload().to_bytes())
-                        .and_then(|msg| publisher.publish(msg).map_err(Into::into))
-                    {
-                        tracing::warn!("topic import failed: {e}");
-                    }
+                    // Retain Zenoh storage; native endpoints stay on the ROS worker.
+                    let _ = tx.send(sample.payload().clone());
                 })
                 .wait()
                 .map_err(|e| anyhow!("{e}"))?;
             routes._zenoh_subscriptions.push(sub);
+            routes.topic_imports.push(ImportTopic { endpoint, rx });
         }
         for r in &c.expose_services {
             let (request, response) = service_codecs(&r.ros_type)?;
@@ -263,6 +250,39 @@ impl Routes {
         Ok(routes)
     }
     fn poll(&mut self, session: &zenoh::Session, runtime: &tokio::runtime::Runtime) {
+        // Limit work per route so busy topics do not starve services or updates.
+        for topic in &mut self.topic_exports {
+            for _ in 0..64 {
+                match topic.endpoint.take() {
+                    Ok(Some(cdr)) => {
+                        if !topic.throttle.allow(Instant::now()) {
+                            continue;
+                        }
+                        let mut payload = Vec::with_capacity(topic.prefix.len() + cdr.len());
+                        payload.extend_from_slice(&topic.prefix);
+                        payload.extend_from_slice(cdr);
+                        if let Err(e) = topic.publisher.put(payload).wait() {
+                            tracing::warn!("topic export failed: {e}");
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        tracing::warn!("topic export failed: {e}");
+                        break;
+                    }
+                }
+            }
+        }
+        for topic in &mut self.topic_imports {
+            for _ in 0..64 {
+                let Ok(payload) = topic.rx.try_recv() else {
+                    break;
+                };
+                if let Err(e) = topic.endpoint.publish(&payload.to_bytes()) {
+                    tracing::warn!("topic import failed: {e}");
+                }
+            }
+        }
         for s in &mut self.exports {
             for _ in 0..self.max_in_flight {
                 let query = match s.queryable.try_recv() {
@@ -398,8 +418,7 @@ struct Worker {
     routes: Routes,
     control: Endpoint,
     context: Rc<NativeContext>,
-    executor: rclrs::Executor,
-    node: rclrs::Node,
+    topic_context: Rc<NativeContext>,
     session: zenoh::Session,
     config: Config,
     runtime: tokio::runtime::Runtime,
@@ -408,9 +427,7 @@ impl Worker {
     fn new(session: zenoh::Session, config: Config) -> Result<Self> {
         let domain = crate::config::domain_from_env()?;
         let context = NativeContext::new(domain, &format!("{}_services", config.node_name))?;
-        let ros = rclrs::Context::new([], rclrs::InitOptions::new().with_domain_id(Some(domain)))?;
-        let executor = ros.create_basic_executor();
-        let node = executor.create_node(config.node_name.as_str())?;
+        let topic_context = NativeContext::new(domain, &config.node_name)?;
         let control = Endpoint::new(
             context.clone(),
             "rcl_interfaces/srv/SetParametersAtomically",
@@ -418,7 +435,7 @@ impl Worker {
             true,
             10,
         )?;
-        let routes = Routes::build(&session, &node, context.clone(), &config)?;
+        let routes = Routes::build(&session, topic_context.clone(), context.clone(), &config)?;
         routes.active.store(true, Ordering::Release);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -428,8 +445,7 @@ impl Worker {
             routes,
             control,
             context,
-            executor,
-            node,
+            topic_context,
             session,
             config,
             runtime,
@@ -437,7 +453,12 @@ impl Worker {
     }
     fn apply(&mut self, config: Config) -> Result<()> {
         config.validate_update(&self.config)?;
-        let next = Routes::build(&self.session, &self.node, self.context.clone(), &config)?;
+        let next = Routes::build(
+            &self.session,
+            self.topic_context.clone(),
+            self.context.clone(),
+            &config,
+        )?;
         self.routes.active.store(false, Ordering::Release);
         self.routes = next;
         self.config = config;
@@ -494,14 +515,7 @@ impl Worker {
                 tracing::warn!("configuration service: {e}");
             }
             self.routes.poll(&self.session, &self.runtime);
-            for error in self
-                .executor
-                .spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(5)))
-            {
-                if !error.is_timeout() {
-                    tracing::warn!("ROS executor: {error}");
-                }
-            }
+            thread::sleep(Duration::from_millis(1));
         }
     }
 }

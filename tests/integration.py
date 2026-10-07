@@ -14,7 +14,7 @@ import unittest
 import rclpy
 from rclpy.context import Context
 from rclpy.executors import SingleThreadedExecutor
-from rclpy.qos import QoSProfile
+from rclpy.qos import QoSProfile, DurabilityPolicy
 from std_msgs.msg import String, Float64MultiArray, MultiArrayDimension
 from example_interfaces.srv import AddTwoInts
 from rcl_interfaces.msg import Parameter, ParameterValue
@@ -153,9 +153,10 @@ class BridgeIntegration(unittest.TestCase):
         self.assertTrue(self.got_array)
         self.assertEqual(self.got_array[-1], array)
         self.assertFalse(any(x.startswith("a-") for x in self.unbridged), "ROS domains were not isolated")
-        # Large payload followed by a short one exercises reusable codec capacity
+        # Large payload followed by a short one exercises reusable receive capacity
         # and Zenoh transport without retaining bytes from the previous message.
-        for payload in ["large:" + "x" * (1024 * 1024), "short-after-large"]:
+        for payload in ["large:" + "x" * (1024 * 1024),
+                        "larger:" + "y" * (8 * 1024 * 1024), "short-after-large", ""]:
             count = len(self.got_a)
             self.pub_b.publish(String(data=payload))
             self.assertTrue(self.pump(5, lambda: len(self.got_a) > count), "large-message delivery timed out")
@@ -253,6 +254,26 @@ class BridgeIntegration(unittest.TestCase):
         client.remove_pending_request(future)
         self.change(0, self.a_config); self.change(1, self.b_config)
         self.check_processes()
+
+    def test_06_transient_local_serialized_topics(self):
+        qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        publisher = self.nodes[0].create_publisher(String, "/latched_source", qos)
+        self.addCleanup(self.nodes[0].destroy_publisher, publisher)
+        # Publish before creating the bridge subscription: export must receive history.
+        publisher.publish(String(data="retained-before-route"))
+        a = copy.deepcopy(self.a_config); b = copy.deepcopy(self.b_config)
+        a["publish"].append({"ros_topic": "/latched_source", "ros_type": "std_msgs/msg/String",
+                             "zenoh_key_prefix": "site_a", "qos": {"transient_local": True, "depth": 1}})
+        b["subscribe"].append({"zenoh_key": "site_a/latched_source", "ros_topic": "/latched_import",
+                               "ros_type": "std_msgs/msg/String", "qos": {"transient_local": True, "depth": 1}})
+        # Set up import first; Zenoh itself has no retained-message cache here.
+        self.change(1, b); self.change(0, a); self.pump(2)
+        received = []
+        subscriber = self.nodes[1].create_subscription(String, "/latched_import", lambda m: received.append(m.data), qos)
+        self.addCleanup(self.nodes[1].destroy_subscription, subscriber)
+        self.assertTrue(self.pump(5, lambda: bool(received)), "serialized publisher lost transient-local history")
+        self.assertEqual(received[-1], "retained-before-route")
+        self.change(0, self.a_config); self.change(1, self.b_config)
 
     @classmethod
     def cleanup(cls):

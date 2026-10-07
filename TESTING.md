@@ -1,5 +1,15 @@
 # Test Record
 
+## Serialized Topic Forwarding
+
+Verified on 2026-10-07: ROS 2 Humble / amd64, release profile. Topic routes now use RCL serialized take/publish; services retain dynamic messages. The wire format and configuration are unchanged.
+
+- 10 unit tests passed, including legacy codec payload compatibility with real serialized ROS endpoints; the manual encode benchmark remains ignored.
+- 6 integration tests passed with Fast DDS and 6 with CycloneDDS. Coverage includes bidirectional topics, exact 1 MiB/8 MiB strings followed by short/empty strings, nested sequences, throttling, transient-local history on export/import, dynamic QoS/route updates, rollback, concurrent services, and timeouts.
+- Release build, clippy, and formatting checks passed; upstream dependency warnings remain.
+
+This removes plugin-level topic serialization/deserialization, not application or middleware work. No end-to-end speedup factor is claimed. Topic imports queue retained payloads on the worker; sustained overload can grow the queue. Malformed headers/types/truncated CDR are rejected; deeper CDR validation is delegated to RMW/consumers. Jazzy/Lyrical and arm64 were not rerun for this change.
+
 ## Copy and Allocation Optimization
 
 Verified on 2026-10-07: ROS 2 Humble / amd64, Rust 1.97.1, release profile. All 9 unit tests and 5 integration tests passed; release clippy and formatting checks passed. The manual benchmark is ignored in normal test runs. Concurrent codec tests alternate large/small messages across four threads and verify payload ownership and round trips. Integration tests also forward a 1 MiB string followed by a short string and verify exact contents.

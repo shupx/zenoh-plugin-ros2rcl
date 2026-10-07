@@ -7,4 +7,4 @@ Only `src/dynamic_message.rs` is modified:
 - `native_ptr()` and `native_mut_ptr()` expose message storage for synchronous RCL/RMW calls.
 - `new_service_message()` loads request/response metadata from the `srv` namespace.
 
-Upstream lacks dynamic service/client APIs. `native/bridge.c` supplies them while rclrs owns message allocation and destruction. Service endpoints stay on the worker thread; topic codecs share immutable type support and use independent message storage.
+Upstream lacks dynamic service/client APIs. `native/bridge.c` supplies them while rclrs owns message allocation and destruction. Topics use RCL serialized take/publish directly. Native endpoints stay on the worker thread.

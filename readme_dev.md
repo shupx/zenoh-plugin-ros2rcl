@@ -26,8 +26,8 @@ The bridge accepts `-c CONFIG.json5` (or `--config`) and statically registers th
 
 | Route | ROS 2 | Zenoh |
 | --- | --- | --- |
-| `publish` | Dynamic subscription | Publisher |
-| `subscribe` | Dynamic publisher | Subscriber |
+| `publish` | RCL serialized subscription | Publisher |
+| `subscribe` | RCL serialized publisher | Subscriber |
 | `expose_services` | Dynamic client | Queryable and reply |
 | `query_services` | Dynamic service | Query and reply |
 
@@ -35,7 +35,11 @@ Dynamic services use an RCL adapter with rclrs-owned messages; see [vendor/READM
 
 Payload: `R2R` + version byte 1 + little-endian u32 type-name length + UTF-8 type name + ROS CDR. Receivers check version and type. This protocol differs from zenoh-plugin-ros2dds.
 
-Each codec reuses a mutex-protected RMW serialization buffer and caches its wire header. CDR is copied once into the final, exactly sized Rust payload; no C intermediate copy is needed. Buffer capacity is retained until the codec is dropped. Service replies retain `ZBytes` across threads; fragmented payloads may still need coalescing at decode. Topic routes continue to use rclrs dynamic messages.
+Topics use `rcl_take_serialized_message` and `rcl_publish_serialized_message`: the plugin forwards CDR without decoding fields or re-serializing messages. Type support is still loaded at runtime. Exports reuse a receive buffer, apply throttling, then copy CDR once into the final payload. Imports retain `ZBytes` and borrow contiguous CDR for publishing; fragmented payloads may require coalescing. RMW/transport layers may still copy data, and application ROS publishers/subscribers still serialize/deserialize.
+
+Native topic endpoints stay on the ROS worker, retaining the existing topic/service node names. Zenoh callbacks enqueue payload references; the worker processes up to 64 messages per topic per pass and sleeps 1 ms between passes. The import queue is unbounded to avoid dropping accepted messages; sustained overload can grow memory. Receive buffers retain their largest capacity until route cleanup. Header/version/type checks remain; deeper CDR validation is delegated to RMW and ROS consumers.
+
+Services retain dynamic messages. Each service codec reuses a mutex-protected RMW serialization buffer and copies CDR once into the final payload. Service replies retain `ZBytes` across threads.
 
 Throttling uses a monotonic clock and `(sent + 1) / elapsed <= limit`, resetting after the decision. The window is 1 second, or `1/limit` below 1 Hz. The first message waits for budget; bursts are possible.
 
@@ -55,7 +59,7 @@ cargo test --release --locked large_message_encode_benchmark -- --ignored --noca
 ZENOH_D=/path/to/zenohd /usr/bin/python3 tests/integration.py
 ```
 
-Integration tests use ROS domains 171/172; override with `TEST_DOMAIN_A` and `TEST_DOMAIN_B`. Set `ROS2RCL_BUILD_PROFILE=release` to test release binaries. `CARGO_TARGET_DIR` is supported. Results: [TESTING.md](TESTING.md).
+Integration tests use ROS domains 171/172; override with `TEST_DOMAIN_A` and `TEST_DOMAIN_B`. The serialized compatibility unit test uses domain 173 (`TEST_DOMAIN_NATIVE` overrides it). Set `ROS2RCL_BUILD_PROFILE=release` to test release binaries. `CARGO_TARGET_DIR` is supported. Results: [TESTING.md](TESTING.md).
 
 ## Releases
 

@@ -8,6 +8,19 @@ use std::{
 };
 
 unsafe extern "C" {
+    fn bridge_topic_new(
+        ctx: *mut c_void,
+        package: *const c_char,
+        ty: *const c_char,
+        name: *const c_char,
+        publisher: c_int,
+        reliable: c_int,
+        transient_local: c_int,
+        depth: usize,
+    ) -> *mut c_void;
+    fn bridge_topic_free(topic: *mut c_void);
+    fn bridge_topic_take(topic: *mut c_void, data: *mut *const u8, size: *mut usize) -> c_int;
+    fn bridge_topic_publish(topic: *mut c_void, data: *const u8, size: usize) -> c_int;
     fn bridge_error() -> *const c_char;
     fn bridge_reset_error();
     fn bridge_context_new(domain: usize, name: *const c_char) -> *mut c_void;
@@ -83,6 +96,91 @@ impl Drop for NativeContext {
     }
 }
 
+// Topics and their reusable receive buffers stay on the ROS worker thread.
+pub struct SerializedTopic {
+    ptr: NonNull<c_void>,
+    _context: Rc<NativeContext>,
+    ty: String,
+    prefix: Vec<u8>,
+}
+impl SerializedTopic {
+    pub fn new(
+        context: Rc<NativeContext>,
+        ty: &str,
+        name: &str,
+        publisher: bool,
+        qos: &crate::config::Qos,
+    ) -> Result<Self> {
+        let (package, kind) = crate::config::type_parts(ty, "msg")?;
+        let package = CString::new(package)?;
+        let kind = CString::new(kind)?;
+        let name = CString::new(name)?;
+        let ptr = unsafe {
+            bridge_topic_new(
+                context.0.as_ptr(),
+                package.as_ptr(),
+                kind.as_ptr(),
+                name.as_ptr(),
+                publisher.into(),
+                qos.reliable.into(),
+                qos.transient_local.into(),
+                qos.depth as usize,
+            )
+        };
+        let mut prefix = b"R2R\x01".to_vec();
+        prefix.extend_from_slice(&(ty.len() as u32).to_le_bytes());
+        prefix.extend_from_slice(ty.as_bytes());
+        Ok(Self {
+            ptr: NonNull::new(ptr).ok_or_else(|| error("create serialized topic"))?,
+            _context: context,
+            ty: ty.into(),
+            prefix,
+        })
+    }
+    pub fn take(&mut self) -> Result<Option<&[u8]>> {
+        let mut data = std::ptr::null();
+        let mut size = 0;
+        match unsafe { bridge_topic_take(self.ptr.as_ptr(), &mut data, &mut size) } {
+            0 => {
+                ensure!(size >= 4 && !data.is_null(), "truncated CDR");
+                // Exclusive borrow prevents another take or drop while bytes are in use.
+                Ok(Some(unsafe { std::slice::from_raw_parts(data, size) }))
+            }
+            1 => Ok(None),
+            _ => Err(error("take serialized topic")),
+        }
+    }
+    pub fn prefix(&self) -> &[u8] {
+        &self.prefix
+    }
+    pub fn publish(&self, payload: &[u8]) -> Result<()> {
+        let cdr = payload_cdr(payload, &self.ty)?;
+        check(
+            unsafe { bridge_topic_publish(self.ptr.as_ptr(), cdr.as_ptr(), cdr.len()) },
+            "publish serialized topic",
+        )
+    }
+}
+impl Drop for SerializedTopic {
+    fn drop(&mut self) {
+        unsafe { bridge_topic_free(self.ptr.as_ptr()) }
+    }
+}
+fn payload_cdr<'a>(data: &'a [u8], ty: &str) -> Result<&'a [u8]> {
+    ensure!(
+        data.len() >= 8 && &data[..4] == b"R2R\x01",
+        "invalid ROS2RCL payload version"
+    );
+    let n = u32::from_le_bytes(data[4..8].try_into()?) as usize;
+    ensure!(
+        n <= data.len() - 8 && &data[8..8 + n] == ty.as_bytes(),
+        "ROS payload type mismatch"
+    );
+    let cdr = &data[8 + n..];
+    ensure!(cdr.len() >= 4, "truncated CDR");
+    Ok(cdr)
+}
+
 pub struct Codec {
     ptr: NonNull<c_void>,
     metadata: DynamicMessageMetadata,
@@ -154,17 +252,7 @@ impl Codec {
         Ok(out)
     }
     pub fn decode(&self, data: &[u8]) -> Result<DynamicMessage> {
-        ensure!(
-            data.len() >= 8 && &data[..4] == b"R2R\x01",
-            "invalid ROS2RCL payload version"
-        );
-        let n = u32::from_le_bytes(data[4..8].try_into()?) as usize;
-        ensure!(
-            n <= data.len() - 8 && &data[8..8 + n] == self.ty.as_bytes(),
-            "ROS payload type mismatch"
-        );
-        let cdr = &data[8 + n..];
-        ensure!(cdr.len() >= 4, "truncated CDR");
+        let cdr = payload_cdr(data, &self.ty)?;
         let mut msg = self.message()?;
         check(
             unsafe {
@@ -322,6 +410,58 @@ mod tests {
         let mut wrong_version = data.clone();
         wrong_version[3] = 2;
         assert!(codec.decode(&wrong_version).is_err());
+    }
+
+    #[test]
+    fn serialized_topic_legacy_payload_compatibility() {
+        let domain = std::env::var("TEST_DOMAIN_NATIVE")
+            .unwrap_or_else(|_| "173".into())
+            .parse()
+            .unwrap();
+        let context = NativeContext::new(domain, "serialized_wire_test").unwrap();
+        let ty = "std_msgs/msg/String";
+        let qos = crate::config::Qos::default();
+        let publisher =
+            SerializedTopic::new(context.clone(), ty, "/serialized_wire_test", true, &qos).unwrap();
+        let mut subscriber =
+            SerializedTopic::new(context, ty, "/serialized_wire_test", false, &qos).unwrap();
+        let codec = Codec::new(ty).unwrap();
+        let mut message = codec.message().unwrap();
+        if let Some(ValueMut::Simple(SimpleValueMut::String(s))) = message.get_mut("data") {
+            *s = "legacy codec to serialized topic".into();
+        }
+        let encoded = codec.encode(&message).unwrap();
+        assert!(publisher.publish(b"garbage").is_err());
+        let mut wrong_version = encoded.clone();
+        wrong_version[3] = 2;
+        assert!(publisher.publish(&wrong_version).is_err());
+        let mut wrong_type = encoded.clone();
+        wrong_type[8] = b'X';
+        assert!(publisher.publish(&wrong_type).is_err());
+        assert!(publisher
+            .publish(&encoded[..publisher.prefix().len() + 3])
+            .is_err());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let received = loop {
+            publisher.publish(&encoded).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            if let Some(cdr) = subscriber.take().unwrap() {
+                break cdr.to_vec();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "serialized topic discovery timed out"
+            );
+        };
+        let mut wire = subscriber.prefix().to_vec();
+        wire.extend_from_slice(&received);
+        let decoded = codec.decode(&wire).unwrap();
+        match decoded.get("data") {
+            Some(Value::Simple(SimpleValue::String(s))) => {
+                assert_eq!(s.to_string(), "legacy codec to serialized topic")
+            }
+            _ => panic!("missing string field"),
+        }
     }
 
     #[test]
