@@ -8,7 +8,11 @@
 #include <stdio.h>
 
 typedef struct { rcl_context_t context; rcl_node_t node; } bridge_context;
-typedef struct { void *library; const rosidl_message_type_support_t *support; } bridge_codec;
+typedef struct {
+  void *library;
+  const rosidl_message_type_support_t *support;
+  rmw_serialized_message_t serialized;
+} bridge_codec;
 typedef struct {
   bridge_context *context;
   void *library;
@@ -17,7 +21,11 @@ typedef struct {
   rcl_client_t client;
 } bridge_endpoint;
 
-const char *bridge_error(void) { return rcutils_get_error_string().str; }
+const char *bridge_error(void) {
+  static _Thread_local rcutils_error_string_t error;
+  error = rcutils_get_error_string();
+  return error.str;
+}
 void bridge_reset_error(void) { rcutils_reset_error(); }
 
 bridge_context *bridge_context_new(size_t domain, const char *name) {
@@ -62,20 +70,25 @@ bridge_codec *bridge_codec_new(const char *package, const char *ns, const char *
   if (!getter) { dlclose(lib); return NULL; }
   bridge_codec *c = calloc(1, sizeof(*c));
   if (!c) { dlclose(lib); return NULL; }
+  c->serialized = rmw_get_zero_initialized_serialized_message();
+  rcutils_allocator_t allocator = rcutils_get_default_allocator();
+  if (rmw_serialized_message_init(&c->serialized, 0, &allocator) != RMW_RET_OK) {
+    dlclose(lib); free(c); return NULL;
+  }
   c->library = lib; c->support = getter(); return c;
 }
-void bridge_codec_free(bridge_codec *c) { dlclose(c->library); free(c); }
-int bridge_serialize(bridge_codec *c, const void *message, unsigned char **out, size_t *size) {
-  rmw_serialized_message_t buf = rmw_get_zero_initialized_serialized_message();
-  rcutils_allocator_t allocator = rcutils_get_default_allocator();
-  if (rmw_serialized_message_init(&buf, 0, &allocator) != RMW_RET_OK) return -1;
-  int ret = rmw_serialize(message, c->support, &buf);
+void bridge_codec_free(bridge_codec *c) {
+  rmw_ret_t ignored = rmw_serialized_message_fini(&c->serialized); (void)ignored;
+  dlclose(c->library); free(c);
+}
+/* Rust holds this codec's serialization lock until it copies the borrowed bytes. */
+int bridge_serialize(bridge_codec *c, const void *message, const unsigned char **out, size_t *size) {
+  c->serialized.buffer_length = 0;
+  int ret = rmw_serialize(message, c->support, &c->serialized);
   if (ret == RMW_RET_OK) {
-    *out = malloc(buf.buffer_length);
-    if (!*out) ret = RMW_RET_ERROR;
-    else { *size = buf.buffer_length; memcpy(*out, buf.buffer, *size); }
+    *out = c->serialized.buffer;
+    *size = c->serialized.buffer_length;
   }
-  rmw_ret_t ignored = rmw_serialized_message_fini(&buf); (void)ignored;
   return ret;
 }
 int bridge_deserialize(bridge_codec *c, const unsigned char *data, size_t size, void *message) {

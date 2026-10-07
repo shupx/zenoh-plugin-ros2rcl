@@ -20,6 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 use zenoh::{
+    bytes::ZBytes,
     query::{ConsolidationMode, Query, QueryTarget},
     Wait,
 };
@@ -113,8 +114,8 @@ struct ImportService {
     timeout: Duration,
     pending: HashMap<u64, Header>,
     next: u64,
-    tx: mpsc::Sender<(u64, Result<Vec<u8>>)>,
-    rx: mpsc::Receiver<(u64, Result<Vec<u8>>)>,
+    tx: mpsc::Sender<(u64, Result<ZBytes>)>,
+    rx: mpsc::Receiver<(u64, Result<ZBytes>)>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 struct Routes {
@@ -323,9 +324,11 @@ impl Routes {
             s.tasks.retain(|task| !task.is_finished());
             while let Ok((id, result)) = s.rx.try_recv() {
                 if let Some(header) = s.pending.remove(&id) {
-                    let outcome = result.and_then(|data| s.response.decode(&data)).and_then(
-                        |mut msg| unsafe { s.endpoint.respond(&header, msg.native_mut_ptr()) },
-                    );
+                    let outcome = result
+                        .and_then(|data| s.response.decode(&data.to_bytes()))
+                        .and_then(|mut msg| unsafe {
+                            s.endpoint.respond(&header, msg.native_mut_ptr())
+                        });
                     if let Err(e) = outcome {
                         tracing::warn!(
                             "Zenoh service query failed (ROS caller will time out): {e}"
@@ -368,7 +371,7 @@ impl Routes {
                                     .await
                                     .map_err(|e| anyhow!("no service reply: {e}"))?;
                                 match reply.result() {
-                                    Ok(sample) => Ok(sample.payload().to_bytes().into_owned()),
+                                    Ok(sample) => Ok(sample.payload().clone()),
                                     Err(e) => Err(anyhow!(
                                         "remote service error: {}",
                                         e.payload().try_to_string().unwrap_or_default()

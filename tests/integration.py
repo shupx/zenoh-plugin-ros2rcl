@@ -153,6 +153,13 @@ class BridgeIntegration(unittest.TestCase):
         self.assertTrue(self.got_array)
         self.assertEqual(self.got_array[-1], array)
         self.assertFalse(any(x.startswith("a-") for x in self.unbridged), "ROS domains were not isolated")
+        # Large payload followed by a short one exercises reusable codec capacity
+        # and Zenoh transport without retaining bytes from the previous message.
+        for payload in ["large:" + "x" * (1024 * 1024), "short-after-large"]:
+            count = len(self.got_a)
+            self.pub_b.publish(String(data=payload))
+            self.assertTrue(self.pump(5, lambda: len(self.got_a) > count), "large-message delivery timed out")
+            self.assertEqual(self.got_a[-1], payload)
 
     def test_02_concurrent_bidirectional_services(self):
         futures = []

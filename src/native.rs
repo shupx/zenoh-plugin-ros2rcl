@@ -4,7 +4,7 @@ use std::{
     ffi::{c_char, c_int, c_void, CStr, CString},
     ptr::NonNull,
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 unsafe extern "C" {
@@ -21,7 +21,7 @@ unsafe extern "C" {
     fn bridge_serialize(
         codec: *mut c_void,
         msg: *const c_void,
-        out: *mut *mut u8,
+        out: *mut *const u8,
         size: *mut usize,
     ) -> c_int;
     fn bridge_deserialize(
@@ -87,8 +87,11 @@ pub struct Codec {
     ptr: NonNull<c_void>,
     metadata: DynamicMessageMetadata,
     ty: String,
+    prefix: Vec<u8>,
+    serialize_lock: Mutex<()>,
 }
-// Type support is immutable; each operation receives independent message storage.
+// Type support is immutable. Serialization uses a locked reusable native buffer;
+// deserialization receives independent message storage and never accesses that buffer.
 unsafe impl Send for Codec {}
 unsafe impl Sync for Codec {}
 impl Codec {
@@ -108,17 +111,27 @@ impl Codec {
         let ns = CString::new(p[1])?;
         let name = CString::new(p[2])?;
         let ptr = unsafe { bridge_codec_new(package.as_ptr(), ns.as_ptr(), name.as_ptr()) };
+        let mut prefix = Vec::with_capacity(8 + ty.len());
+        prefix.extend_from_slice(b"R2R\x01");
+        prefix.extend_from_slice(&(ty.len() as u32).to_le_bytes());
+        prefix.extend_from_slice(ty.as_bytes());
         Ok(Arc::new(Self {
             ptr: NonNull::new(ptr).ok_or_else(|| error("load message codec"))?,
             metadata,
             ty: ty.into(),
+            prefix,
+            serialize_lock: Mutex::new(()),
         }))
     }
     pub fn message(&self) -> Result<DynamicMessage> {
         Ok(self.metadata.create()?)
     }
     pub fn encode(&self, message: &DynamicMessage) -> Result<Vec<u8>> {
-        let mut data = std::ptr::null_mut();
+        let _guard = self
+            .serialize_lock
+            .lock()
+            .map_err(|_| anyhow!("serialization lock poisoned"))?;
+        let mut data = std::ptr::null();
         let mut size = 0;
         check(
             unsafe {
@@ -132,12 +145,11 @@ impl Codec {
             "serialize",
         )?;
         // Version and type tag prevent decoding a key with mismatched ROS types.
-        let mut out = b"R2R\x01".to_vec();
-        out.extend_from_slice(&(self.ty.len() as u32).to_le_bytes());
-        out.extend_from_slice(self.ty.as_bytes());
+        let mut out = Vec::with_capacity(self.prefix.len() + size);
+        out.extend_from_slice(&self.prefix);
         unsafe {
+            // The native buffer stays valid and exclusively borrowed until _guard drops.
             out.extend_from_slice(std::slice::from_raw_parts(data, size));
-            bridge_free(data.cast());
         }
         Ok(out)
     }
@@ -263,6 +275,30 @@ mod tests {
     use rclrs::{SimpleValue, SimpleValueMut, Value, ValueMut};
 
     #[test]
+    #[ignore = "manual serialization benchmark"]
+    fn large_message_encode_benchmark() {
+        let codec = Codec::new("std_msgs/msg/String").unwrap();
+        for size in [1024, 1024 * 1024, 8 * 1024 * 1024] {
+            let mut message = codec.message().unwrap();
+            if let Some(ValueMut::Simple(SimpleValueMut::String(s))) = message.get_mut("data") {
+                *s = "x".repeat(size).into();
+            }
+            let iterations = if size <= 1024 { 10000 } else { 100 };
+            for _ in 0..10 {
+                std::hint::black_box(codec.encode(&message).unwrap());
+            }
+            let start = std::time::Instant::now();
+            for _ in 0..iterations {
+                std::hint::black_box(codec.encode(&message).unwrap());
+            }
+            println!(
+                "encode {size} bytes: {:.1} us/message",
+                start.elapsed().as_secs_f64() * 1e6 / iterations as f64
+            );
+        }
+    }
+
+    #[test]
     fn dynamic_message_cdr_and_invalid_payloads() {
         let codec = Codec::new("std_msgs/msg/String").unwrap();
         let mut message = codec.message().unwrap();
@@ -311,5 +347,38 @@ mod tests {
         ));
         assert!(response.decode(&bytes).is_err());
         response.message().unwrap();
+    }
+
+    #[test]
+    fn shared_codec_concurrent_buffer_reuse() {
+        let codec = Codec::new("std_msgs/msg/String").unwrap();
+        std::thread::scope(|scope| {
+            for worker in 0..4 {
+                let codec = codec.clone();
+                scope.spawn(move || {
+                    for size in [0, 1, 1024 * 1024, 17, 4096, 0] {
+                        let text = format!("worker-{worker}:") + &"x".repeat(size);
+                        let mut message = codec.message().unwrap();
+                        if let Some(ValueMut::Simple(SimpleValueMut::String(s))) =
+                            message.get_mut("data")
+                        {
+                            *s = text.as_str().into();
+                        } else {
+                            panic!("missing string field");
+                        }
+                        let encoded = codec.encode(&message).unwrap();
+                        let again = codec.encode(&message).unwrap();
+                        assert_eq!(encoded, again);
+                        let result = codec.decode(&encoded).unwrap();
+                        match result.get("data") {
+                            Some(Value::Simple(SimpleValue::String(s))) => {
+                                assert_eq!(s.to_string(), text)
+                            }
+                            _ => panic!("missing string field"),
+                        }
+                    }
+                });
+            }
+        });
     }
 }

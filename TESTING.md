@@ -1,5 +1,19 @@
 # Test Record
 
+## Copy and Allocation Optimization
+
+Verified on 2026-10-07: ROS 2 Humble / amd64, Rust 1.97.1, release profile. All 9 unit tests and 5 integration tests passed; release clippy and formatting checks passed. The manual benchmark is ignored in normal test runs. Concurrent codec tests alternate large/small messages across four threads and verify payload ownership and round trips. Integration tests also forward a 1 MiB string followed by a short string and verify exact contents.
+
+Warm `std_msgs/msg/String` encoding benchmark on the same machine:
+
+| String size | Before (µs/message) | After (µs/message) |
+| --- | --- | --- |
+| 1 KiB | 1.1 | 0.7 |
+| 1 MiB | 1537.3 | 251.5 |
+| 8 MiB | 13555.6 | 2268.6 |
+
+These timings measure `Codec::encode`, including serialization and payload allocation, not network/ROS end-to-end latency. Buffers were warmed up; 1 KiB used 10,000 iterations, larger sizes 100. Each codec retains its maximum serialization capacity until route cleanup and serializes encode calls with a mutex. Topic APIs, wire format, type validation, QoS, throttling, concurrent services, timeouts, and configuration behavior are retained. Jazzy/Lyrical and arm64 were not rerun for this optimization.
+
 Configuration schema update verified on 2026-10-07 with ROS 2 Humble / amd64: 8 unit tests and 5 integration tests passed. Bridge processes use `ROS_DOMAIN_ID` for domain isolation. Tests cover independent per-route topic/service prefixes, live prefix updates, legacy-field rejection, and rollback. Startup with an unset domain uses 0; invalid environment values are rejected. `set_config.py --ros-service` successfully updates the domain-0 bridge. Jazzy/Lyrical and arm64 were not rerun for this update.
 
 Verified on 2026-10-06 (Asia/Shanghai): Linux, ROS 2 Humble, Rust 1.97.1, rclrs 0.8.0, Zenoh 1.10.1.

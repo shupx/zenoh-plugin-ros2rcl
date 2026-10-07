@@ -18,11 +18,13 @@ The `version` should match the zenohd version. The `ros2` suffix should match yo
 | Standalone bridge | `zenoh-bridge-ros2rcl-<version>-<target>-<ros2-version>` |
 | Plugin for an existing zenohd | `zenoh-plugin-ros2rcl-<version>-<target>-<ros2-version>` |
 
-`zenoh-bridge-ros2rcl` is a standalone binary that runs a Zenoh node with this plugin built-in. And `zenoh-plugin-ros2rcl` is a shared library that can be loaded by an existing zenohd binary. BOth can be use according to your needs. 
+`zenoh-bridge-ros2rcl` is a standalone binary that runs a Zenoh node with this plugin built-in. And `zenoh-plugin-ros2rcl` is a shared library that can be loaded by an existing zenohd binary. Both can be used according to your needs: 
 
 ### 1. Standalone Bridge
 
-Edit `plugins.ros2rcl` in [host-a.json5](config/host-a.json5), [host-b.json5](config/host-b.json5), and [host-c.json5](config/host-c.json5) for your topics and services. Set the local domain with `ROS_DOMAIN_ID` (default: 0).
+An example configuration for a three-machine setup is provided in the `config` directory: 
+
+Edit `plugins.ros2rcl` in [host-a.json5](config/host-a.json5), [host-b.json5](config/host-b.json5), and [host-c.json5](config/host-c.json5) for your topics and services. Set the local domain with the environment variable `ROS_DOMAIN_ID` (default: 0).
 
 The connection chain is `A -> B -> C`: A connects to B on TCP 7447, and B connects to C on TCP 7448. Replace the loopback addresses in A and B with B's and C's reachable addresses, respectively. Allow the listening ports on B and C. Multicast and gossip discovery are disabled to prevent automatic A-C connections.
 
@@ -64,7 +66,7 @@ On host B, use `config/host-b.json5`. If the library is elsewhere, optionally sp
 
 ## Configuration
 
-An example configuration for zenohd with this plugin loaded is below. 
+An example configuration for this bridge or zenohd with this plugin loaded is below. 
 
 ```json5
 {

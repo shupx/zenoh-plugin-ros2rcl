@@ -35,6 +35,8 @@ Dynamic services use an RCL adapter with rclrs-owned messages; see [vendor/READM
 
 Payload: `R2R` + version byte 1 + little-endian u32 type-name length + UTF-8 type name + ROS CDR. Receivers check version and type. This protocol differs from zenoh-plugin-ros2dds.
 
+Each codec reuses a mutex-protected RMW serialization buffer and caches its wire header. CDR is copied once into the final, exactly sized Rust payload; no C intermediate copy is needed. Buffer capacity is retained until the codec is dropped. Service replies retain `ZBytes` across threads; fragmented payloads may still need coalescing at decode. Topic routes continue to use rclrs dynamic messages.
+
 Throttling uses a monotonic clock and `(sent + 1) / elapsed <= limit`, resetting after the decision. The window is 1 second, or `1/limit` below 1 Hz. The first message waits for budget; bursts are possible.
 
 Configuration updates stage resources before replacing routes. ROS service updates are held in memory; Zenoh plugin configuration updates are also supported. Neither path guarantees lossless switching.
@@ -47,6 +49,7 @@ The domain is read once from `ROS_DOMAIN_ID` (unset: 0). Route fields are `ros_t
 cargo test --locked
 cargo clippy --all-targets --no-deps --locked -- -D warnings
 cargo fmt -- --check
+cargo test --release --locked large_message_encode_benchmark -- --ignored --nocapture
 /usr/bin/python3 tests/integration.py
 # Optional external-host test.
 ZENOH_D=/path/to/zenohd /usr/bin/python3 tests/integration.py
