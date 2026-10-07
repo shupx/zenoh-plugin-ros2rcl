@@ -50,25 +50,29 @@ The `version` should match the zenohd version. The `ros2` suffix should match yo
 | Standalone bridge | `zenoh-bridge-ros2rcl-<version>-<target>-<ros2-version>` |
 | Plugin for an existing zenohd | `zenoh-plugin-ros2rcl-<version>-<target>-<ros2-version>` |
 
-## Standalone Bridge
+`zenoh-bridge-ros2rcl` is a standalone binary that runs a Zenoh node with this plugin built-in. And `zenoh-plugin-ros2rcl` is a shared library that can be loaded by an existing zenohd binary. BOth can be use according to your needs. 
+
+### 1. Standalone Bridge
 
 Edit `plugins.ros2rcl` in [host-a.json5](config/host-a.json5) and [host-b.json5](config/host-b.json5) for your topics, services, and ROS domains. In B's `connect.endpoints`, replace `127.0.0.1` with A's reachable address. Allow TCP port 7447 on A.
 
 On host A:
 
 ```bash
+source /opt/ros/<distro>/setup.bash
 ./zenoh-bridge-ros2rcl -c config/host-a.json5
 ```
 
 On host B:
 
 ```bash
+source /opt/ros/<distro>/setup.bash
 ./zenoh-bridge-ros2rcl -c config/host-b.json5
 ```
 
-The examples use domains 10 and 20. Run local ROS applications in the matching domain, for example `export ROS_DOMAIN_ID=10` on A.
+For more details on the zenoh configuration, see [zenoh configuration document](https://zenoh.io/docs/manual/configuration/) and [zenohd default configuration](https://github.com/eclipse-zenoh/zenoh/blob/main/DEFAULT_CONFIG.json5).
 
-## zenohd Plugin
+### 2. zenohd Plugin
 
 For zenohd, put `libzenoh_plugin_ros2rcl.so` in the same directory as the zenohd executable, or set `plugins.ros2rcl.__path__` to the absolute path of the extracted `libzenoh_plugin_ros2rcl.so`. See [zenohd.json5](config/zenohd.json5). 
 
