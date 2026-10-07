@@ -1,8 +1,8 @@
 {
   mode: "peer",
-  // A connects only to B. Replace with host B's reachable address.
-  connect: {
-    endpoints: ["tcp/127.0.0.1:7447"],
+  // B connects here. A and C have no direct connection or ROS routes.
+  listen: {
+    endpoints: ["tcp/0.0.0.0:7448"],
   },
   scouting: {
     multicast: {
@@ -14,33 +14,24 @@
   },
   plugins: {
     ros2rcl: {
-      node_name: "zenoh_ros2rcl",
-      config_service: "/zenoh_ros2rcl/set_config",
-      max_in_flight: 64,
       publish: [
         {
           ros_topic: "/chatter",
-          zenoh_key_prefix: "host_a",
+          zenoh_key_prefix: "host_c",
           ros_type: "std_msgs/msg/String",
-          max_frequency: 10.0,
-          qos: {
-            reliable: true,
-            transient_local: false,
-            depth: 10,
-          },
         },
       ],
       subscribe: [
         {
           zenoh_key: "host_b/chatter",
-          ros_topic: "/remote_chatter",
+          ros_topic: "/from_b/chatter",
           ros_type: "std_msgs/msg/String",
         },
       ],
       expose_services: [
         {
           ros_service: "/add_two_ints",
-          zenoh_key_prefix: "host_a",
+          zenoh_key_prefix: "host_c",
           ros_type: "example_interfaces/srv/AddTwoInts",
           timeout_ms: 5000,
         },
@@ -48,7 +39,7 @@
       query_services: [
         {
           zenoh_key: "host_b/add_two_ints",
-          ros_service: "/remote_add_two_ints",
+          ros_service: "/from_b/add_two_ints",
           ros_type: "example_interfaces/srv/AddTwoInts",
           timeout_ms: 6000,
         },

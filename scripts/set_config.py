@@ -11,14 +11,14 @@ from rcl_interfaces.srv import SetParametersAtomically
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("config", type=Path, help="strict JSON configuration")
-    parser.add_argument("--service", default="/zenoh_ros2rcl/set_config")
+    parser.add_argument("--ros-service", default="/zenoh_ros2rcl/set_config")
     parser.add_argument("--timeout", type=float, default=15)
     args = parser.parse_args()
     value = json.loads(args.config.read_text())
     rclpy.init()
     node = rclpy.create_node("ros2rcl_config_client")
     try:
-        client = node.create_client(SetParametersAtomically, args.service)
+        client = node.create_client(SetParametersAtomically, args.ros_service)
         if not client.wait_for_service(timeout_sec=args.timeout):
             raise SystemExit("configuration service unavailable")
         req = SetParametersAtomically.Request(parameters=[Parameter(name="config", value=ParameterValue(type=4, string_value=json.dumps(value)))])

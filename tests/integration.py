@@ -40,21 +40,22 @@ class BridgeIntegration(unittest.TestCase):
         domain_a = int(os.environ.get("TEST_DOMAIN_A", "171"))
         domain_b = int(os.environ.get("TEST_DOMAIN_B", "172"))
         cls.a_config = {
-            "domain_id": domain_a, "key_prefix": "site_a",
-            "publish": [{"topic": "/source", "ros_type": "std_msgs/msg/String", "max_frequency": 10.0},
-                        {"topic": "/array", "ros_type": "std_msgs/msg/Float64MultiArray"}],
-            "subscribe": [{"key": "site_b/source", "topic": "/from_b", "ros_type": "std_msgs/msg/String"}],
-            "expose_services": [{"service": "/add", "ros_type": "example_interfaces/srv/AddTwoInts", "timeout_ms": 1000}],
-            "query_services": [{"key": "site_b/add", "service": "/remote_add", "ros_type": "example_interfaces/srv/AddTwoInts", "timeout_ms": 1500}],
+            "publish": [{"ros_topic": "/source", "ros_type": "std_msgs/msg/String", "max_frequency": 10.0},
+                        {"ros_topic": "/array", "ros_type": "std_msgs/msg/Float64MultiArray"}],
+            "subscribe": [{"zenoh_key": "site_b/source", "ros_topic": "/from_b", "ros_type": "std_msgs/msg/String"}],
+            "expose_services": [{"ros_service": "/add", "ros_type": "example_interfaces/srv/AddTwoInts", "timeout_ms": 1000}],
+            "query_services": [{"zenoh_key": "site_b/add", "ros_service": "/remote_add", "ros_type": "example_interfaces/srv/AddTwoInts", "timeout_ms": 1500}],
         }
         cls.b_config = {
-            "domain_id": domain_b, "key_prefix": "site_b",
-            "publish": [{"topic": "/source", "ros_type": "std_msgs/msg/String"}],
-            "subscribe": [{"key": "site_a/source", "topic": "/from_a", "ros_type": "std_msgs/msg/String"},
-                          {"key": "site_a/array", "topic": "/from_array", "ros_type": "std_msgs/msg/Float64MultiArray"}],
-            "expose_services": [{"service": "/add", "ros_type": "example_interfaces/srv/AddTwoInts", "timeout_ms": 1000}],
-            "query_services": [{"key": "site_a/add", "service": "/remote_add", "ros_type": "example_interfaces/srv/AddTwoInts", "timeout_ms": 1500}],
+            "publish": [{"ros_topic": "/source", "ros_type": "std_msgs/msg/String"}],
+            "subscribe": [{"zenoh_key": "site_a/source", "ros_topic": "/from_a", "ros_type": "std_msgs/msg/String"},
+                          {"zenoh_key": "site_a/array", "ros_topic": "/from_array", "ros_type": "std_msgs/msg/Float64MultiArray"}],
+            "expose_services": [{"ros_service": "/add", "ros_type": "example_interfaces/srv/AddTwoInts", "timeout_ms": 1000}],
+            "query_services": [{"zenoh_key": "site_a/add", "ros_service": "/remote_add", "ros_type": "example_interfaces/srv/AddTwoInts", "timeout_ms": 1500}],
         }
+        for cfg, prefix in [(cls.a_config, "site_a"), (cls.b_config, "site_b")]:
+            for route in cfg["publish"] + cfg["expose_services"]:
+                route["zenoh_key_prefix"] = prefix
         p = port()
         z_a = {"mode": "peer", "listen": {"endpoints": [f"tcp/127.0.0.1:{p}"]},
                "scouting": {"multicast": {"enabled": False}}}
@@ -65,7 +66,8 @@ class BridgeIntegration(unittest.TestCase):
             zcfg["plugins"] = {"ros2rcl": dict(cfg, __required__=True)}
             log = open(Path(cls.temp.name) / f"bridge{i}.log", "w+")
             cls.logs.append(log)
-            env = dict(os.environ, RUST_LOG="info")
+            domain = [domain_a, domain_b][i]
+            env = dict(os.environ, RUST_LOG="info", ROS_DOMAIN_ID=str(domain))
             if os.environ.get("ZENOH_D"):
                 zcfg["plugins"]["ros2rcl"]["__path__"] = str(TARGET_DIR / BUILD_PROFILE / "libzenoh_plugin_ros2rcl.so")
                 cmd = [os.environ["ZENOH_D"], "-c", str(zfile)]
@@ -74,7 +76,7 @@ class BridgeIntegration(unittest.TestCase):
             zfile.write_text(json.dumps(zcfg))
             cls.processes.append(subprocess.Popen(cmd, stdout=log, stderr=log, env=env))
             ctx = Context()
-            rclpy.init(context=ctx, domain_id=cfg["domain_id"])
+            rclpy.init(context=ctx, domain_id=domain)
             node = rclpy.create_node(f"integration_{i}", context=ctx)
             executor = SingleThreadedExecutor(context=ctx)
             executor.add_node(node)
@@ -163,28 +165,30 @@ class BridgeIntegration(unittest.TestCase):
 
     def test_03_failed_config_preserves_routes(self):
         invalid = copy.deepcopy(self.b_config)
-        invalid["subscribe"].append({"key": "other/key", "topic": "/bad", "ros_type": "nonexistent_pkg/msg/Missing"})
+        invalid["subscribe"].append({"zenoh_key": "other/key", "ros_topic": "/bad", "ros_type": "nonexistent_pkg/msg/Missing"})
         self.change(1, invalid, success=False)
         future = self.clients[1].call_async(AddTwoInts.Request(a=40, b=2))
         self.assertTrue(self.pump(5, future.done))
         self.assertEqual(future.result().sum, 42)
         invalid = copy.deepcopy(self.b_config)
-        invalid["domain_id"] += 1
+        invalid["domain_id"] = 42
         self.change(1, invalid, success=False)
 
     def test_04_live_topic_prefix_service_mapping_and_removal(self):
         a = copy.deepcopy(self.a_config); b = copy.deepcopy(self.b_config)
-        a["key_prefix"] = "renamed_a"
+        a["publish"][0]["zenoh_key_prefix"] = "renamed_a"
+        a["publish"][1]["zenoh_key_prefix"] = "arrays_a"
+        a["expose_services"][0]["zenoh_key_prefix"] = "services_a"
         a["max_in_flight"] = 32
         b["max_in_flight"] = 32
         a["publish"][0]["max_frequency"] = None
         a["publish"][0]["qos"] = {"reliable": False, "depth": 20}
-        a["subscribe"][0]["topic"] = "/renamed_from_b"
-        a["query_services"][0]["service"] = "/renamed_remote"
-        a["expose_services"][0]["service"] = "/renamed_add"
-        b["subscribe"][0].update(key="renamed_a/source", topic="/renamed_from_a")
-        b["subscribe"][1]["key"] = "renamed_a/array"
-        b["query_services"][0]["key"] = "renamed_a/renamed_add"
+        a["subscribe"][0]["ros_topic"] = "/renamed_from_b"
+        a["query_services"][0]["ros_service"] = "/renamed_remote"
+        a["expose_services"][0]["ros_service"] = "/renamed_add"
+        b["subscribe"][0].update(zenoh_key="renamed_a/source", ros_topic="/renamed_from_a")
+        b["subscribe"][1]["zenoh_key"] = "arrays_a/array"
+        b["query_services"][0]["zenoh_key"] = "services_a/renamed_add"
         def renamed_add(req, resp):
             resp.sum = req.a + req.b
             return resp
@@ -193,6 +197,12 @@ class BridgeIntegration(unittest.TestCase):
         newsubs = [self.nodes[0].create_subscription(String, "/renamed_from_b", lambda m: received[0].append(m.data), 100),
                    self.nodes[1].create_subscription(String, "/renamed_from_a", lambda m: received[1].append(m.data), 100)]
         self.change(0, a); self.change(1, b); self.pump(2)
+        array_count = len(self.got_array)
+        for _ in range(5):
+            self.pub_array.publish(Float64MultiArray(data=[42.0]))
+            self.pump(0.05)
+        self.assertGreater(len(self.got_array), array_count, "independent array prefix was not applied")
+        self.assertEqual(list(self.got_array[-1].data), [42.0])
         old_a, old_b = len(self.got_a), len(self.got_b)
         for _ in range(30):
             self.pub_a.publish(String(data="new-a")); self.pub_b.publish(String(data="new-b")); self.pump(0.02)
@@ -222,9 +232,9 @@ class BridgeIntegration(unittest.TestCase):
 
     def test_05_timeout_and_recovery(self):
         b = copy.deepcopy(self.b_config)
-        b["query_services"].append({"key": "site_a/missing", "service": "/missing_proxy", "ros_type": "example_interfaces/srv/AddTwoInts", "timeout_ms": 300})
+        b["query_services"].append({"zenoh_key": "site_a/missing", "ros_service": "/missing_proxy", "ros_type": "example_interfaces/srv/AddTwoInts", "timeout_ms": 300})
         a = copy.deepcopy(self.a_config)
-        a["expose_services"].append({"service": "/missing", "ros_type": "example_interfaces/srv/AddTwoInts", "timeout_ms": 100})
+        a["expose_services"].append({"ros_service": "/missing", "zenoh_key_prefix": "site_a", "ros_type": "example_interfaces/srv/AddTwoInts", "timeout_ms": 100})
         self.change(0, a); self.change(1, b)
         client = self.nodes[1].create_client(AddTwoInts, "/missing_proxy")
         self.assertTrue(client.wait_for_service(timeout_sec=5))

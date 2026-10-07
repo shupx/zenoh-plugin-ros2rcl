@@ -162,14 +162,14 @@ impl Routes {
         for r in &c.publish {
             let codec = Codec::new(&r.ros_type)?;
             let publisher = session
-                .declare_publisher(c.export_key(&r.topic))
+                .declare_publisher(r.zenoh_key())
                 .wait()
                 .map_err(|e| anyhow!("{e}"))?;
             let active = routes.active.clone();
             let throttle = Mutex::new(Throttle::new(r.max_frequency));
             let sub = node.create_dynamic_subscription(
                 r.ros_type.as_str().try_into()?,
-                r.topic.as_str().qos(qos(&r.qos)),
+                r.ros_topic.as_str().qos(qos(&r.qos)),
                 move |msg, _| {
                     if !active.load(Ordering::Acquire)
                         || !throttle.lock().unwrap().allow(Instant::now())
@@ -190,11 +190,11 @@ impl Routes {
             let codec = Codec::new(&r.ros_type)?;
             let publisher = node.create_dynamic_publisher(
                 r.ros_type.as_str().try_into()?,
-                r.topic.as_str().qos(qos(&r.qos)),
+                r.ros_topic.as_str().qos(qos(&r.qos)),
             )?;
             let active = routes.active.clone();
             let sub = session
-                .declare_subscriber(r.key.clone())
+                .declare_subscriber(r.zenoh_key.clone())
                 .callback(move |sample| {
                     if !active.load(Ordering::Acquire) {
                         return;
@@ -215,11 +215,11 @@ impl Routes {
             let endpoint = Endpoint::new(
                 context.clone(),
                 &r.ros_type,
-                &r.service,
+                &r.ros_service,
                 false,
                 c.max_in_flight,
             )?;
-            let key = c.export_key(&r.service);
+            let key = r.zenoh_key();
             let queryable = session
                 .declare_queryable(key.clone())
                 .complete(true)
@@ -241,7 +241,7 @@ impl Routes {
             let endpoint = Endpoint::new(
                 context.clone(),
                 &r.ros_type,
-                &r.service,
+                &r.ros_service,
                 true,
                 c.max_in_flight,
             )?;
@@ -250,7 +250,7 @@ impl Routes {
                 endpoint,
                 request,
                 response,
-                key: r.key.clone(),
+                key: r.zenoh_key.clone(),
                 timeout: Duration::from_millis(r.timeout_ms),
                 pending: HashMap::new(),
                 next: 0,
@@ -403,12 +403,9 @@ struct Worker {
 }
 impl Worker {
     fn new(session: zenoh::Session, config: Config) -> Result<Self> {
-        let context =
-            NativeContext::new(config.domain_id, &format!("{}_services", config.node_name))?;
-        let ros = rclrs::Context::new(
-            [],
-            rclrs::InitOptions::new().with_domain_id(Some(config.domain_id)),
-        )?;
+        let domain = crate::config::domain_from_env()?;
+        let context = NativeContext::new(domain, &format!("{}_services", config.node_name))?;
+        let ros = rclrs::Context::new([], rclrs::InitOptions::new().with_domain_id(Some(domain)))?;
         let executor = ros.create_basic_executor();
         let node = executor.create_node(config.node_name.as_str())?;
         let control = Endpoint::new(

@@ -39,6 +39,8 @@ Throttling uses a monotonic clock and `(sent + 1) / elapsed <= limit`, resetting
 
 Configuration updates stage resources before replacing routes. ROS service updates are held in memory; Zenoh plugin configuration updates are also supported. Neither path guarantees lossless switching.
 
+The domain is read once from `ROS_DOMAIN_ID` (unset: 0). Route fields are `ros_topic`, `ros_service`, and `zenoh_key`. Export routes each have a `zenoh_key_prefix` (default: `ros2`); there is no global prefix or configurable domain.
+
 ## Tests
 
 ```bash

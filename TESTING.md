@@ -1,5 +1,7 @@
 # Test Record
 
+Configuration schema update verified on 2026-10-07 with ROS 2 Humble / amd64: 8 unit tests and 5 integration tests passed. Bridge processes use `ROS_DOMAIN_ID` for domain isolation. Tests cover independent per-route topic/service prefixes, live prefix updates, legacy-field rejection, and rollback. Startup with an unset domain uses 0; invalid environment values are rejected. `set_config.py --ros-service` successfully updates the domain-0 bridge. Jazzy/Lyrical and arm64 were not rerun for this update.
+
 Verified on 2026-10-06 (Asia/Shanghai): Linux, ROS 2 Humble, Rust 1.97.1, rclrs 0.8.0, Zenoh 1.10.1.
 
 Zenoh 1.10.1 dependencies come from crates.io and are pinned in `Cargo.lock`.

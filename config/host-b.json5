@@ -1,22 +1,63 @@
 {
   mode: "peer",
-  // Replace with host A's reachable address.
-  connect: { endpoints: ["tcp/127.0.0.1:7447"] },
-  scouting: { multicast: { enabled: false } },
+  // A connects to this listener.
+  listen: {
+    endpoints: ["tcp/0.0.0.0:7447"],
+  },
+  // B connects to C. Replace with host C's reachable address.
+  connect: {
+    endpoints: ["tcp/127.0.0.1:7448"],
+  },
+  scouting: {
+    multicast: {
+      enabled: false,
+    },
+    gossip: {
+      enabled: false,
+    },
+  },
   plugins: {
     ros2rcl: {
-      domain_id: 20,
-      key_prefix: "host_b",
-      publish: [{ topic: "/chatter", ros_type: "std_msgs/msg/String" }],
+      publish: [
+        {
+          ros_topic: "/chatter",
+          zenoh_key_prefix: "host_b",
+          ros_type: "std_msgs/msg/String",
+        },
+      ],
       subscribe: [
-        { key: "host_a/chatter", topic: "/remote_chatter", ros_type: "std_msgs/msg/String" },
+        {
+          zenoh_key: "host_a/chatter",
+          ros_topic: "/remote_chatter",
+          ros_type: "std_msgs/msg/String",
+        },
+        {
+          zenoh_key: "host_c/chatter",
+          ros_topic: "/from_c/chatter",
+          ros_type: "std_msgs/msg/String",
+        },
       ],
       expose_services: [
-        { service: "/add_two_ints", ros_type: "example_interfaces/srv/AddTwoInts", timeout_ms: 5000 },
+        {
+          ros_service: "/add_two_ints",
+          zenoh_key_prefix: "host_b",
+          ros_type: "example_interfaces/srv/AddTwoInts",
+          timeout_ms: 5000,
+        },
       ],
       query_services: [
-        { key: "host_a/add_two_ints", service: "/remote_add_two_ints",
-          ros_type: "example_interfaces/srv/AddTwoInts", timeout_ms: 6000 },
+        {
+          zenoh_key: "host_a/add_two_ints",
+          ros_service: "/remote_add_two_ints",
+          ros_type: "example_interfaces/srv/AddTwoInts",
+          timeout_ms: 6000,
+        },
+        {
+          zenoh_key: "host_c/add_two_ints",
+          ros_service: "/from_c/add_two_ints",
+          ros_type: "example_interfaces/srv/AddTwoInts",
+          timeout_ms: 6000,
+        },
       ],
     },
   },
